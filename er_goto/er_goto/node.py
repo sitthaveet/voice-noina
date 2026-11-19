@@ -34,20 +34,20 @@ from rclpy.utilities import remove_ros_args
 from sensor_msgs.msg import CameraInfo, Image
 
 from er_goto import control, geometry
+from er_goto.commands import Command, EXIT_FAILED, EXIT_OK, NewCommand, command_loop
 from er_goto.gemini_client import GeminiError, GeminiPointer, ResponseParseError, point_to_pixel
 
 # clip_cmd of the rpo default policy (src/inference/robots/rpo/configs/default.yaml).
 POLICY_MAX_LINEAR_X = 0.6
 POLICY_MAX_ANGULAR_Z = 0.8
 
-EXIT_OK = 0
-EXIT_FAILED = 1
 EXIT_STOPPED = 130
 
 PARAMETERS = {
     # Runtime flags
     'target': '',
     'interactive': False,
+    'voice': False,
     'dry_run': False,
     'save_debug_images': False,
     'debug_dir': '~/er_goto_debug',
@@ -100,14 +100,6 @@ PARAMETERS = {
 
 class StopRequested(BaseException):
     """Raised from the signal handler; BaseException so library code cannot swallow it."""
-
-
-class NewCommand(Exception):
-    """A command was typed while walking; it replaces the current target."""
-
-    def __init__(self, line):
-        super().__init__(line)
-        self.line = line
 
 
 @dataclass
@@ -206,7 +198,7 @@ class ErGotoNode(Node):
     def _validate_parameters(self):
         p = self.p
         errors = []
-        if not p['interactive'] and not control.extract_target(p['target']):
+        if not (p['interactive'] or p['voice']) and not control.extract_target(p['target']):
             errors.append('target is empty (e.g. target:=chair)')
         if not 0.0 < p['max_linear_x'] <= POLICY_MAX_LINEAR_X:
             errors.append(f'max_linear_x must be in (0, {POLICY_MAX_LINEAR_X}]')
@@ -347,7 +339,7 @@ class ErGotoNode(Node):
                                         msg.is_bigendian, msg.data)
         return geometry.depth_to_meters(depth, self.p['depth_scale'])
 
-    def wait_for_camera(self, max_age=2.0):
+    def wait_for_camera(self, max_age=2.0, check_command=lambda: None):
         """Wait until colour, depth and camera_info have all arrived within max_age s."""
         deadline = time.monotonic() + self.p['startup_timeout']
         topics = {'rgb': 'color_topic', 'depth': 'depth_topic', 'info': 'camera_info_topic'}
@@ -357,16 +349,18 @@ class ErGotoNode(Node):
             return frame is not None and time.monotonic() - frame.received <= max_age
 
         while time.monotonic() < deadline:
+            check_command()
             if all(fresh(k) for k in topics):
                 return
             time.sleep(0.1)
         missing = [self.p[t] for k, t in topics.items() if not fresh(k)]
         raise RuntimeError(f'no data on {", ".join(missing)}; is the camera running?')
 
-    def wait_for_robot(self):
+    def wait_for_robot(self, check_command=lambda: None):
         """Check that something (inference_node) subscribes to /cmd_vel."""
         deadline = time.monotonic() + self.p['startup_timeout']
         while time.monotonic() < deadline:
+            check_command()
             if self.count_subscribers(self.cmd_topic) > 0:
                 return
             time.sleep(0.1)
@@ -468,9 +462,15 @@ class ErGotoNode(Node):
         p = self.p
         log.info(f'Target: "{target}"; publishing to {self.cmd_topic}'
                  f'{" (dry run)" if p["dry_run"] else ""}')
-        self.wait_for_camera()
+
+        def check_command():
+            command = poll_command()
+            if command is not None:
+                raise NewCommand(command)
+
+        self.wait_for_camera(check_command=check_command)
         if not p['dry_run']:
-            self.wait_for_robot()
+            self.wait_for_robot(check_command)
             if not self._told_operator:
                 self._told_operator = True
                 log.info('The robot moves only after Y was pressed on the gamepad. '
@@ -498,9 +498,7 @@ class ErGotoNode(Node):
                 now = time.monotonic()
                 if now > deadline:
                     raise control.GaveUp(f'max_run_time {p["max_run_time"]:.0f} s reached')
-                line = poll_command()
-                if line is not None:
-                    raise NewCommand(line)
+                check_command()
                 if self._watchdog_fired():
                     nav.stop(now, 'watchdog fired')
 
@@ -574,40 +572,15 @@ def repl(node, first_line=''):
     log.info(HELP)
     threading.Thread(target=_read_commands, args=(node.commands,), daemon=True).start()
 
-    def poll_command():
+    def get_command(timeout=0):
         try:
-            return node.commands.get_nowait()
+            line = node.commands.get(timeout=timeout)
         except queue.Empty:
             return None
+        return Command(*control.parse_command(line))
 
-    pending = first_line.strip() or None
-    while True:
-        line, pending = pending, None
-        while line is None:  # with a timeout, so that a signal is handled promptly
-            try:
-                line = node.commands.get(timeout=0.5)
-            except queue.Empty:
-                pass
-        action, target = control.parse_command(line)
-        if action == 'quit':
-            return EXIT_OK
-        if action == 'help':
-            log.info(HELP)
-        elif action == 'stop':
-            node.publish_zero()
-            log.info('Stopped. Waiting for the next command')
-        elif action == 'go':
-            try:
-                node.run(target, poll_command)
-            except NewCommand as exc:
-                log.info(f'Leaving "{target}" for: {exc.line}')
-                pending = exc.line
-            except Exception as exc:  # GeminiFatalError, camera loss, ...
-                log.error(f'{type(exc).__name__}: {exc}')
-            finally:
-                node.publish_zero(count=10)
-            if pending is None:
-                log.info('Waiting for the next command')
+    first = Command(*control.parse_command(first_line)) if first_line else None
+    return command_loop(node, get_command, pending=first, help_text=HELP)
 
 
 def _report(node, message, warning=False):
@@ -636,13 +609,19 @@ def main(args=None):
 
     node = None
     executor = None
+    voice = None
     exit_code = EXIT_FAILED
     try:
         node = ErGotoNode()
         executor = SingleThreadedExecutor()
         executor.add_node(node)
         threading.Thread(target=executor.spin, daemon=True).start()
-        if node.p['interactive']:
+        if node.p['voice']:
+            from er_goto.voice import VoiceSession
+            voice = VoiceSession(node.get_logger())
+            voice.start()
+            exit_code = command_loop(node, voice.commands.get, voice.commands.report)
+        elif node.p['interactive']:
             # A first command may follow the executable: er_goto_node walk to the chair --ros-args
             exit_code = repl(node, ' '.join(remove_ros_args(args)[1:]) or node.p['target'])
         else:
@@ -658,6 +637,8 @@ def main(args=None):
             node.stop_watchdog()
             node.publish_zero(count=10)
             node.get_logger().info(f'Published zero; exiting with code {exit_code}')
+        if voice is not None:
+            voice.close()
         if executor is not None:
             executor.shutdown()
         if node is not None:

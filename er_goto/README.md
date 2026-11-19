@@ -44,6 +44,30 @@ Avoid `pip install opencv-python` on the robot: it pulls numpy 2, which breaks R
 
 **3. API key.** In the repository root, copy `.env.example` to `.env` and set `GEMINI_API_KEY`. `.env` is git-ignored; `start_er_goto.sh` and `snapshot_test.py` read it.
 
+## Voice mode on the RDK X5
+
+Connect the XVF3800 to the X5 over USB and the powered speaker to the array's 3.5 mm output. Use the 16 kHz USB firmware. Voice mode captures processed channel 0 and plays replies through the same device so its acoustic echo canceller receives the playback signal. [reSpeaker setup](https://wiki.seeedstudio.com/respeaker_xvf3800_introduction/)
+
+Add `OPENAI_API_KEY` alongside `GEMINI_API_KEY` in the root `.env`. Install the voice dependencies in the Python environment used by the ROS node:
+
+```bash
+sudo apt install -y libportaudio2
+python3 -m pip install --user sounddevice 'websockets>=14,<17'
+python3 -m sounddevice
+./tools/start_er_goto.sh --voice --dry-run
+```
+
+The launcher selects a duplex device named reSpeaker or XVF3800. If discovery is ambiguous, set `RESPEAKER_DEVICE` to the exact index from `python3 -m sounddevice`. Once the log says GPT-Live is listening, speak naturally. GPT-Live handles the language, including switches during conversation. Microphone audio goes to OpenAI for the duration of the session. GPT-Live delegates explicit movement requests to a Responses backend with one function, `walk_to`. Gemini receives camera frames and the requested target. [GPT-Live delegation](https://developers.openai.com/api/docs/guides/live-delegation)
+
+With the robot off and the camera running, check the following on `/cmd_vel_test`:
+
+1. Ask an ordinary question and interrupt the reply. Verify you hear a response in your language and the robot's own voice never triggers walking.
+2. Ask Noina to walk to the red chair in your language. While it is pursuing, ask for a different destination. Check for zero velocity before it looks for the replacement.
+3. Ask Noina to stop walking during pursuit and while Gemini is processing an image. Verify zero velocity followed by silence on the topic. Time the spoken command to the first zero separately from the locally accepted stop to the first zero (one control tick during pursuit).
+4. Unplug the mic or disconnect the network mid-walk. After the failure is detected the node publishes zero and exits. Restart the script and verify it waits for a fresh spoken command.
+
+After the dry run, repeat on the crane, then follow the existing floor test. Use `./tools/start_robot.sh` and `./tools/start_er_goto.sh --voice` for these stages. Keep the gamepad in hand. A spoken stop depends on audio capture, the network and model latency. **Y** takes back control locally. Ctrl+C stops the node and ends the voice session.
+
 ## Running
 
 ```bash

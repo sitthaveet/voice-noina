@@ -57,3 +57,5 @@ log
 
 # env file
 .env
+
+.DS_Store

@@ -97,6 +97,7 @@ Useful options:
 | Command | Purpose |
 | --- | --- |
 | `./tools/start_er_goto.sh walk to the chair` | Run this command first, then show the prompt |
+| `./tools/start_er_goto.sh --voice --dry-run` | Talk to Noina (น้อยหน่า) in your language and test spoken walk/stop commands. See [voice setup](er_goto/README.md#voice-mode-on-the-rdk-x5). |
 | `./tools/start_er_goto.sh --dry-run` | Publish to `/cmd_vel_test` instead of `/cmd_vel`; the robot does not need to run |
 | `./tools/start_er_goto.sh --debug-images` | Save each camera frame with the Gemini point drawn to `~/er_goto_debug/<time>-<target>/` |
 | `./tools/start_er_goto.sh --restart-camera` | Restart the camera session before running |

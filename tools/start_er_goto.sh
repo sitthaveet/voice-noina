@@ -20,7 +20,7 @@ print_error() {
 }
 
 show_usage() {
-    echo "Usage: $0 [--dry-run] [--debug-images] [--restart-camera] [FIRST COMMAND...]"
+    echo "Usage: $0 [--voice] [--dry-run] [--debug-images] [--restart-camera] [FIRST COMMAND...]"
     echo
     echo "Opens an er_goto> prompt: type where to go, e.g. \"go to the black chair\", and the robot"
     echo "walks there using Gemini Robotics-ER and the RealSense camera. Type the next target"
@@ -30,6 +30,7 @@ show_usage() {
     echo "Run tools/start_robot.sh (default policy) first; after this script starts,"
     echo "press Y on the gamepad to hand control to /cmd_vel."
     echo
+    echo "  --voice           listen and speak using the reSpeaker"
     echo "  --dry-run         publish to /cmd_vel_test instead of /cmd_vel (robot not needed)"
     echo "  --debug-images    save each LOOK frame with the Gemini point to ~/er_goto_debug"
     echo "  --restart-camera  restart the er_camera_session camera before running"
@@ -104,6 +105,7 @@ session_running() {
     screen -ls 2>/dev/null | grep -q "[0-9]\.$1[[:space:]]"
 }
 
+VOICE=false
 DRY_RUN=false
 DEBUG_IMAGES=false
 RESTART_CAMERA=0
@@ -111,6 +113,10 @@ TARGET_WORDS=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        --voice)
+            VOICE=true
+            shift
+            ;;
         --dry-run)
             DRY_RUN=true
             shift
@@ -166,6 +172,21 @@ fi
 if [ -z "${GEMINI_API_KEY:-}" ]; then
     print_error "GEMINI_API_KEY is not set. Copy .env.example to .env and fill it in."
     exit 1
+fi
+
+if [ "$VOICE" = true ]; then
+    if [ "${#TARGET_WORDS[@]}" -gt 0 ]; then
+        print_error "Start voice mode without a first target, then speak your command."
+        exit 1
+    fi
+    if [ -z "${OPENAI_API_KEY:-}" ]; then
+        print_error "Set OPENAI_API_KEY in .env for voice mode."
+        exit 1
+    fi
+    if ! python3 -c "import sounddevice; from websockets.asyncio.client import connect"; then
+        print_error "Install the voice dependencies listed in er_goto/README.md."
+        exit 1
+    fi
 fi
 
 source tools/ros_environment.sh || exit 1
@@ -259,6 +280,7 @@ print_info "Camera keeps running after exit; stop it with: screen -S $CAMERA_SES
 # The first command goes in as plain arguments; -p would parse it as YAML.
 ros2 run er_goto er_goto_node "${TARGET_WORDS[@]}" --ros-args \
     --params-file "$(pwd)/er_goto/config/params.yaml" \
+    -p "voice:=$VOICE" \
     -p interactive:=true \
     -p "dry_run:=$DRY_RUN" \
     -p "save_debug_images:=$DEBUG_IMAGES"
