@@ -25,7 +25,7 @@ show_usage() {
     echo "用法: $0 [--robot ROBOT] [--policy POLICY]"
     echo "      $0 [ROBOT] [POLICY]"
     echo
-    echo "默认: robot=rpo, policy=default；ROS 自动检测，仅支持 Humble、Jazzy"
+    echo "默认: robot=rpo, policy=beyondmimic；ROS 自动检测，仅支持 Humble、Jazzy"
     echo "示例: $0 --robot rpo --policy amp"
     echo "示例: $0 rpo beyondmimic"
 }
@@ -87,6 +87,10 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+if [[ "$ROBOT" == rpo && "$POLICY_SET" == 0 ]]; then
+    POLICY="beyondmimic"
+fi
 
 validate_name "robot" "$ROBOT"
 validate_name "policy" "$POLICY"
@@ -245,6 +249,18 @@ fi
 if ! command -v screen &> /dev/null; then
     print_error "screen 未安装"
     exit 1
+fi
+
+# Upstream exposes motion selection only through the gamepad. Apply Noina's
+# named wave service to the pinned inference sources before colcon builds them.
+if [[ "$ROBOT" == rpo && "$POLICY_FILE" == beyondmimic.yaml ]]; then
+    wave_patch="$(pwd)/tools/patches/inference-voice-wave.patch"
+    if ! git -C src/inference apply --reverse --check "$wave_patch" 2>/dev/null; then
+        git -C src/inference apply "$wave_patch" || {
+            print_error "Could not apply the wave service to src/inference. Check its revision and local edits."
+            exit 1
+        }
+    fi
 fi
 
 # 编译推理包

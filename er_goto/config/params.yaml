@@ -4,11 +4,12 @@
 
 er_goto:
   ros__parameters:
-    # Gemini
-    model: "gemini-robotics-er-2-preview"
-    thinking_level: "low"        # latency vs accuracy; "" leaves it to the model default
-    gemini_timeout: 15.0         # s per request
-    gemini_retries: 1            # extra attempts on timeout / server error / 429
+    # Astra
+    model: "gpt-6.2-astra"
+    reasoning_effort: "medium"
+    service_tier: "fast"
+    vision_timeout: 15.0         # s per request
+    vision_retries: 1            # extra attempts on timeout / server error / 429
     max_api_errors: 3            # consecutive failed LOOKs before giving up
 
     # Look-while-walking loop
@@ -26,13 +27,13 @@ er_goto:
     max_search: 10               # standing LOOKs in a row without the target before giving up
     min_progress: 0.3            # a standing LOOK must show the robot this fraction of its dead-reckoned walk closer
     max_stalls: 2                # standing LOOKs in a row showing less before giving up; 0 = off (always off in a dry run)
-    max_iterations: 40           # hard cap on Gemini LOOKs
+    max_iterations: 40           # hard cap on Astra LOOKs
     camera_yaw_offset: 0.0       # rad, camera mounting yaw (+ = camera turned left)
-    depth_patch_radius: 5        # px, median depth patch around the Gemini point
+    depth_patch_radius: 5        # px, median depth patch around the Astra point
 
     # Safety
-    max_linear_x: 0.5            # m/s, node clamp; default policy allows up to 0.6
-    max_angular_z: 0.6           # rad/s, node clamp; default policy allows up to 0.8
+    max_linear_x: 0.5            # m/s, node clamp; BeyondMimic allows up to 0.6
+    max_angular_z: 0.6           # rad/s, node clamp; BeyondMimic allows up to 0.8
     publish_rate: 20.0           # Hz, control loop
     max_blind_time: 10.0         # s, stand and look again if the newest fix's photo is older
     max_blind_dist: 2.5          # m, stand and look again after walking this far on one fix

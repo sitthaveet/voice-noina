@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-only
-"""Unit tests for the geometry and Gemini parsing helpers (test stage 1). No ROS needed."""
+"""Unit tests for the geometry and Astra parsing helpers (test stage 1). No ROS needed."""
 
 import math
 
@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from er_goto import geometry
-from er_goto.gemini_client import Point, ResponseParseError, parse_points, point_to_pixel
+from er_goto.vision_client import Point, ResponseParseError, parse_points, point_to_pixel
 
 
 # ------------------------------------------------------------ [y, x] -> pixel
@@ -139,7 +139,7 @@ def test_unsupported_encoding():
         geometry.image_to_array('yuv422', 1, 1, 2, False, b'\x00\x00')
 
 
-# ------------------------------------------------------------ Gemini parsing
+# ------------------------------------------------------------ Astra parsing
 
 def test_parse_plain_json():
     points = parse_points('[{"point": [412, 655], "label": "chair"}]')

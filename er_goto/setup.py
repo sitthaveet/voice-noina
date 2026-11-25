@@ -15,11 +15,11 @@ setup(
         ('share/' + package_name + '/config', glob('config/*.yaml')),
         ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'openai>=2'],
     zip_safe=True,
     maintainer='Son',
     maintainer_email='33903086+sitthaveet@users.noreply.github.com',
-    description='Walk the RPO humanoid to an object located by Gemini Robotics-ER.',
+    description='Walk the RPO humanoid to an object located by GPT-6.2 Astra.',
     license='GPL-3.0-only',
     tests_require=['pytest'],
     entry_points={

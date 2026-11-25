@@ -273,7 +273,7 @@ Start the robot software after completing the configuration:
 ./tools/start_robot.sh
 ```
 
-The default startup configuration is the `rpo` robot with the `default` policy. Specify the robot and policy explicitly as follows:
+The default startup configuration is the `rpo` robot with the `beyondmimic` policy. Specify the robot and policy explicitly as follows:
 
 ```bash
 ./tools/start_robot.sh --robot rpo --policy amp

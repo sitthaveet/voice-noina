@@ -9,11 +9,13 @@ import os
 import queue
 import threading
 
-from er_goto.commands import Command
+from er_goto.commands import WALK_ACTIONS, Command
 from er_goto.voice_audio import RobotAudio
 
+WALK_TO_ACTIONS = (*WALK_ACTIONS, 'stop')
+
 SESSION = {
-    'model': 'gpt-live-1',
+    'model': 'gpt-live-1.1',
     'audio': {'format': {'type': 'audio/pcm', 'rate': 16000}},
     'instructions': (
         "You are Noina (น้อยหน่า, pronounced Noi-Na), a humanoid robot under the company name Human Noy (ฮิวแมนน้อย). "
@@ -22,7 +24,10 @@ SESSION = {
         "Reply briefly and follow the speaker's choice of language. "
         "Your personality is a funny, sarcastic, hilarious, you're allowed to be rude, mean, and cheeky to users "
         "Improvise in the speaker's language and let a good punchline stand on its own. "
-        "When someone asks you to stop walking, delegate immediately. Give movement "
+        "Delegate explicit requests to walk, wave, dance, or greet someone or something. "
+        "A greeting directed at you is conversation. A request to say hi to an object calls "
+        "for a physical wave. Delegate stops immediately. Only claim an action was performed "
+        "when you receive its outcome. Give movement "
         "acknowledgments, clarifying questions, and failure reports plainly. "
         "Listen while speaking and yield to interruptions. "
     ),
@@ -30,19 +35,27 @@ SESSION = {
         'model': 'gpt-6-luna',
         'parallel_tool_calls': False,
         'instructions': (
-            "Call walk_to once per explicit movement request. For go, supply only the visual "
+            "Use wave for a request to wave, dance, greet, or say hi to a recipient. Never walk "
+            "closer unless asked. Use walk_to with go_and_wave for a combined walk and greeting "
+            "in a single call. For walking alone use go. Supply only the visual "
             "target description, preserving identifying details. For stop use an empty target. "
             "Questions, examples, negations and requests to stop speaking are not movement "
             "commands. Ask for clarification when needed. Never retry superseded commands."
         ),
         'tools': [{
             'type': 'function', 'name': 'walk_to',
-            'description': 'Request a walk to a visually described target, or stop walking.',
+            'description': 'Walk to a visual target, optionally wave on arrival, or stop all voice motion.',
             'strict': True,
             'parameters': {'type': 'object', 'additionalProperties': False,
-                           'properties': {'action': {'type': 'string', 'enum': ['go', 'stop']},
+                           'properties': {'action': {'type': 'string', 'enum': list(WALK_TO_ACTIONS)},
                                           'target': {'type': 'string'}},
                            'required': ['action', 'target']},
+        }, {
+            'type': 'function', 'name': 'wave',
+            'description': 'Play the hand-wave greeting once, after arrival if currently walking.',
+            'strict': True,
+            'parameters': {'type': 'object', 'additionalProperties': False,
+                           'properties': {}, 'required': []},
         }],
     }},
 }
@@ -59,19 +72,22 @@ class VoiceCommands:
         self.latest = -1
         self.results = queue.SimpleQueue()
 
-    def submit(self, offset, arguments):
+    def submit(self, offset, arguments, tool='walk_to'):
         try:
             args = json.loads(arguments)
         except (TypeError, ValueError):
             return 'invalid arguments'
-        if not isinstance(args, dict) or set(args) != {'action', 'target'}:
+        if tool == 'wave' and args == {}:
+            action, target = 'wave', ''
+        elif tool == 'walk_to' and isinstance(args, dict) and set(args) == {'action', 'target'}:
+            action, target = args['action'], args['target']
+            if action not in WALK_TO_ACTIONS or not isinstance(target, str):
+                return 'invalid command'
+            target = target.strip()
+            if (action in WALK_ACTIONS) != bool(target) or len(target) > 300:
+                return 'invalid target'
+        else:
             return 'invalid arguments'
-        action, target = args['action'], args['target']
-        if action not in ('stop', 'go') or not isinstance(target, str):
-            return 'invalid command'
-        target = target.strip()
-        if (action == 'go') != bool(target) or len(target) > 300:
-            return 'invalid target'
         with self.condition:
             if self.error or offset < self.latest or (offset == self.latest and action != 'stop'):
                 return 'superseded'
@@ -80,6 +96,8 @@ class VoiceCommands:
             if action == 'stop':
                 self.stop = command
                 self.pending = None
+            elif action == 'wave' and self.pending and self.pending.action in WALK_ACTIONS:
+                self.pending = Command('go_and_wave', self.pending.target, offset)
             else:
                 self.pending = command
             self.condition.notify()
@@ -131,8 +149,8 @@ class LiveEvents:
             result = 'unknown tool or delegation'
             if item.get('status', 'completed') != 'completed':
                 result = 'incomplete call'
-            elif offset is not None and item['name'] == 'walk_to':
-                result = self.commands.submit(offset, item['arguments'])
+            elif offset is not None and item['name'] in ('walk_to', 'wave'):
+                result = self.commands.submit(offset, item['arguments'], item['name'])
             return [{'type': 'response.item.create',
                      'item': {'type': 'function_call_output', 'call_id': item['call_id'],
                               'output': json.dumps({'status': result})}},

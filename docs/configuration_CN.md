@@ -14,7 +14,7 @@
 | [realsense_d435i.yaml](../src/camera/configs/realsense_d435i.yaml) | RealSense `rs_launch.py` | 相机启动配置，采用顶层参数结构 |
 | [set_zero_rpo.yaml](../scripts/config/set_zero_rpo.yaml)、[set_zero_rp1.yaml](../scripts/config/set_zero_rp1.yaml) | `scripts/set_zero.py` | 电机标零配置，采用顶层参数结构 |
 
-机器人启动通过 `--robot` 选择机器人目录，通过 `--policy` 选择该目录的策略配置。默认配置为 `rpo` / `default`。相机启动的 `--policy` 选择 `src/camera/configs/` 中的配置，与机器人策略配置属于不同文件。
+机器人启动通过 `--robot` 选择机器人目录，通过 `--policy` 选择该目录的策略配置。默认配置为 `rpo` / `beyondmimic`。相机启动的 `--policy` 选择 `src/camera/configs/` 中的配置，与机器人策略配置属于不同文件。
 
 | 机器人目录 | 电机数量 | 默认硬件 | 当前策略配置 |
 | --- | --- | --- | --- |

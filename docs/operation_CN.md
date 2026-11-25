@@ -4,7 +4,7 @@
 
 以下操作适用于 RPO 与 RP1。硬件接线、零位基准和策略说明见 [RPO 部署](rpo_deploy_CN.md)。所有命令均在仓库根目录执行。
 
-环境准备、硬件接线、电机标零和软件启动按对应机器人的部署文档执行。RPO 的依赖安装与实时配置见 [RPO 环境准备](rpo_deploy_CN.md#环境准备)。启动默认使用 `rpo` / `default`，使用 RP1 文件时须显式选择机器人。参数定义与文件格式见 [YAML 配置参考](configuration_CN.md)。
+环境准备、硬件接线、电机标零和软件启动按对应机器人的部署文档执行。RPO 的依赖安装与实时配置见 [RPO 环境准备](rpo_deploy_CN.md#环境准备)。启动默认使用 `rpo` / `beyondmimic`，使用 RP1 文件时须显式选择机器人。参数定义与文件格式见 [YAML 配置参考](configuration_CN.md)。
 
 ## ROS 环境与构建
 
@@ -45,7 +45,7 @@ source install/setup.bash
 
 ## 启动与后台日志
 
-启动命令为 `bash tools/start_robot.sh --robot ROBOT --policy POLICY`。省略参数时使用 `rpo` / `default`；具体命令见对应机器人文档。
+启动命令为 `bash tools/start_robot.sh --robot ROBOT --policy POLICY`。省略参数时使用 `rpo` / `beyondmimic`；具体命令见对应机器人文档。
 
 RP1 的 `default` 使用已训练的 Flat 策略（3 帧历史，50 Hz）。`beyondmimic` 启动时使用同一 Flat 策略，按 LB 在行走和挥手之间切换。挥手策略使用 1 帧观测，动作结束后保持末帧：
 

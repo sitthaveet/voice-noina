@@ -1,0 +1,181 @@
+diff --git a/src/inference_node.cpp b/src/inference_node.cpp
+index efc2b1a..4ae1485 100644
+--- a/src/inference_node.cpp
++++ b/src/inference_node.cpp
+@@ -145,6 +145,7 @@ void InferenceNode::reset_runtime_state() {
+     is_interrupt_.store(false);
+     is_motion_policy_.store(false);
+     active_policy_idx_ = 0;
++    voice_wave_ = false;
+     {
+         std::unique_lock<std::mutex> lock(cmd_mutex_);
+         std::fill(cmd_vel_.begin(), cmd_vel_.end(), 0.0f);
+@@ -194,6 +195,10 @@ InferenceNode::PolicyRuntime& InferenceNode::active_policy() {
+ 
+ void InferenceNode::switch_policy(int policy_idx) {
+     std::unique_lock<std::mutex> mode_lock(mode_mutex_);
++    switch_policy_locked(policy_idx);
++}
++
++void InferenceNode::switch_policy_locked(int policy_idx) {
+     std::unique_lock<std::mutex> control_lock(control_mutex_);
+     if (policy_idx < 0 || static_cast<size_t>(policy_idx) >= policies_.size()) {
+         throw std::out_of_range("Policy index out of range: " + std::to_string(policy_idx));
+@@ -257,6 +262,11 @@ void InferenceNode::switch_policy(int policy_idx) {
+         active_policy_idx_ = previous_idx;
+         throw;
+     }
++    if (voice_wave_) {
++        std::lock_guard<std::mutex> lock(cmd_mutex_);
++        std::fill(cmd_vel_.begin(), cmd_vel_.end(), 0.0f);
++        voice_wave_ = false;
++    }
+     is_motion_policy_.store(active_policy().motion_loader != nullptr);
+     {
+         std::unique_lock<std::mutex> action_lock(act_mutex_);
+@@ -436,6 +446,10 @@ void InferenceNode::inference() {
+                 std::this_thread::sleep_until(next_release);
+                 continue;
+             }
++            // A voice wave consumes the last reference frame before returning to gait.
++            if (voice_wave_ && active_policy().motion_frame == active_policy().motion_loader->get_num_frames()) {
++                switch_policy_locked(0);
++            }
+             auto& policy = active_policy();
+             robot_->read_imu();
+             update_obs_segments(policy.obs_segments, policy.obs_layout);
+diff --git a/src/inference_node.hpp b/src/inference_node.hpp
+index 10ead2c..f5c6717 100644
+--- a/src/inference_node.hpp
++++ b/src/inference_node.hpp
+@@ -30,6 +30,7 @@
+ #include "utils/motion_loader.hpp"
+ #include "utils/latent_loader.hpp"
+ #include <std_srvs/srv/trigger.hpp>
++#include <std_srvs/srv/set_bool.hpp>
+ #include "robot_interface.hpp"
+ 
+ enum class ObsStackOrder {
+@@ -162,6 +163,21 @@ class InferenceNode : public rclcpp::Node {
+             this->create_publisher<sensor_msgs::msg::Imu>("/imu", data_qos);
+         joint_state_publisher_ =
+             this->create_publisher<sensor_msgs::msg::JointState>("/joint_states", data_qos);
++        const auto profile = get_parameter("policy_name").as_string();
++        if (get_parameter("robot_name").as_string() == "rpo" &&
++            (profile == "beyondmimic" || profile == "beyondmimic.yaml")) {
++            for (int index : motion_policy_indices_) {
++                const auto& policy = policies_[index];
++                if (policy.name == "policy_wave.onnx" &&
++                    std::filesystem::path(policy.motion_path).filename() == "wave.npz") {
++                    wave_policy_idx_ = index;
++                    wave_service_ = create_service<std_srvs::srv::SetBool>(
++                        "~/wave", std::bind(&InferenceNode::set_wave, this,
++                                           std::placeholders::_1, std::placeholders::_2));
++                    break;
++                }
++            }
++        }
+         inference_thread_ = std::thread(&InferenceNode::inference, this);
+         control_thread_ = std::thread(&InferenceNode::control, this);
+ 
+@@ -219,6 +235,13 @@ class InferenceNode : public rclcpp::Node {
+     std::string perception_obs_topic_;
+     size_t current_motion_policy_idx_ = 0;
+     int active_policy_idx_ = 0;
++    int wave_policy_idx_ = -1;
++    bool voice_wave_ = false;  // protected by mode_mutex_
++    rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr wave_service_;
++    void set_wave(std_srvs::srv::SetBool::Request::SharedPtr request,
++                  std_srvs::srv::SetBool::Response::SharedPtr response);
++    void cancel_voice_wave();
++    void switch_policy_locked(int policy_idx);  // caller holds mode_mutex_
+     int perception_obs_num_, joint_num_;
+     bool use_depth_ = false;
+     int decimation_;
+diff --git a/src/obs_manager.cpp b/src/obs_manager.cpp
+index 44bf52a..a54e769 100644
+--- a/src/obs_manager.cpp
++++ b/src/obs_manager.cpp
+@@ -174,7 +174,7 @@ void InferenceNode::step_motion_frame() {
+         return;
+     }
+     policy.motion_frame += 1;
+-    if (policy.motion_frame >= policy.motion_loader->get_num_frames()) {
++    if (!voice_wave_ && policy.motion_frame >= policy.motion_loader->get_num_frames()) {
+         policy.motion_frame = policy.motion_loader->get_num_frames() - 1;
+     }
+ }
+diff --git a/src/ros_interface.cpp b/src/ros_interface.cpp
+index 94a6928..6da815b 100644
+--- a/src/ros_interface.cpp
++++ b/src/ros_interface.cpp
+@@ -294,6 +294,45 @@ void InferenceNode::load_config() {
+     RCLCPP_INFO(this->get_logger(), "gravity_z_upper: %f", gravity_z_upper_);
+ }
+ 
++void InferenceNode::cancel_voice_wave() {
++    std::lock_guard<std::mutex> lock(mode_mutex_);
++    if (voice_wave_) {
++        switch_policy_locked(0);
++    }
++}
++
++void InferenceNode::set_wave(std_srvs::srv::SetBool::Request::SharedPtr request,
++                             std_srvs::srv::SetBool::Response::SharedPtr response) {
++    try {
++        if (!request->data) {
++            cancel_voice_wave();
++            response->success = true;
++            return;
++        }
++        std::lock_guard<std::mutex> lock(mode_mutex_);
++        std::lock_guard<std::mutex> reset_lock(reset_thread_mutex_);
++        if (is_joy_control_ || !is_running_ || !robot_->is_init_ || reset_thread_running_) {
++            response->message = "Wave needs running inference and gamepad Y handoff";
++            return;
++        }
++        if (!voice_wave_) {
++            if (active_policy_idx_ != 0) {
++                response->message = "Return to walking mode before requesting a wave";
++                return;
++            }
++            {
++                std::lock_guard<std::mutex> cmd_lock(cmd_mutex_);
++                std::fill(cmd_vel_.begin(), cmd_vel_.end(), 0.0f);
++            }
++            switch_policy_locked(wave_policy_idx_);
++            voice_wave_ = true;
++        }
++        response->success = true;
++    } catch (const std::exception& e) {
++        response->message = e.what();
++    }
++}
++
+ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Joy> msg) {
+     if (is_joy_control_){
+         std::unique_lock<std::mutex> lock(cmd_mutex_);
+@@ -338,6 +377,7 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
+         }
+     }
+     if (msg->buttons[1] == 1 && msg->buttons[1] != last_button2_) {
++        cancel_voice_wave();
+         if (is_running_.load()) {
+             is_running_.store(false);
+             RCLCPP_INFO(this->get_logger(), "Inference paused");
+@@ -349,6 +389,7 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
+         }
+     }
+     if (msg->buttons[3] == 1 && msg->buttons[3] != last_button3_) {
++        cancel_voice_wave();
+         is_joy_control_.store(!is_joy_control_);
+         RCLCPP_INFO(this->get_logger(), "Controlled by %s", is_joy_control_.load() ? "joy" : "/cmd_vel");
+     }
+@@ -635,6 +676,7 @@ void InferenceNode::stop_inference_srv(const std::shared_ptr<std_srvs::srv::Trig
+         response->message = "Inference is already stopped";
+         return;
+     }
++    cancel_voice_wave();
+     is_running_.store(false);
+     response->success = true;
+     response->message = "Inference stopped";

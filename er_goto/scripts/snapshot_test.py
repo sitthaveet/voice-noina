@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
-"""Offline check of Gemini pointing on saved photos (test stage 2). No ROS needed.
+"""Camera-free check of Astra pointing on saved photos (test stage 2). No ROS needed.
 
     python3 er_goto/scripts/snapshot_test.py --target chair photo1.jpg photo2.jpg ...
 
 Draws every returned point on a copy of each photo, prints the latency per
-photo and the median. GEMINI_API_KEY comes from the environment or the
+photo and the median. OPENAI_API_KEY comes from the environment or the
 repository's .env file.
 """
 
@@ -23,8 +23,9 @@ REPO_ROOT = PACKAGE_ROOT.parent
 sys.path.insert(0, str(PACKAGE_ROOT))
 
 from er_goto import control  # noqa: E402
-from er_goto.gemini_client import (DEFAULT_MODEL, GeminiError, GeminiPointer,  # noqa: E402
-                                   ResponseParseError, point_to_pixel)
+from er_goto.vision_client import (  # noqa: E402
+    DEFAULT_MODEL, DEFAULT_REASONING_EFFORT, DEFAULT_SERVICE_TIER,
+    ResponseParseError, VisionError, VisionPointer, point_to_pixel)
 
 
 def load_dotenv(path):
@@ -67,7 +68,8 @@ def main():
     parser.add_argument('--out', type=Path, default=Path('snapshot_out'),
                         help='directory for annotated copies (default: ./snapshot_out)')
     parser.add_argument('--model', default=DEFAULT_MODEL)
-    parser.add_argument('--thinking-level', default='low')
+    parser.add_argument('--reasoning-effort', '--thinking-level', default=DEFAULT_REASONING_EFFORT)
+    parser.add_argument('--service-tier', default=DEFAULT_SERVICE_TIER)
     parser.add_argument('--timeout', type=float, default=15.0, help='seconds per request')
     parser.add_argument('--width', type=int, default=640,
                         help='resize photos to this width like the robot camera (0 = keep)')
@@ -75,7 +77,8 @@ def main():
 
     load_dotenv(REPO_ROOT / '.env')
     target = control.extract_target(args.target)
-    pointer = GeminiPointer(model=args.model, thinking_level=args.thinking_level,
+    pointer = VisionPointer(model=args.model, reasoning_effort=args.reasoning_effort,
+                            service_tier=args.service_tier,
                             timeout=args.timeout, retries=0)
     args.out.mkdir(parents=True, exist_ok=True)
 
@@ -95,7 +98,7 @@ def main():
         started = time.monotonic()
         try:
             points, text = pointer.point(jpeg.tobytes(), target)
-        except (GeminiError, ResponseParseError) as exc:
+        except (VisionError, ResponseParseError) as exc:
             latency = time.monotonic() - started
             print(f'{path}: {type(exc).__name__}: {exc} ({latency:.1f} s)')
             continue
@@ -116,7 +119,7 @@ def main():
 
     print(f'\nTarget "{target}" found in {found}/{len(args.images)} photo(s)')
     if latencies:
-        print(f'Gemini latency: median {statistics.median(latencies):.1f} s, '
+        print(f'Astra latency: median {statistics.median(latencies):.1f} s, '
               f'min {min(latencies):.1f} s, max {max(latencies):.1f} s')
     return 0 if latencies else 1
 

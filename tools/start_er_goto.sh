@@ -23,16 +23,16 @@ show_usage() {
     echo "Usage: $0 [--voice] [--dry-run] [--debug-images] [--restart-camera] [FIRST COMMAND...]"
     echo
     echo "Opens an er_goto> prompt: type where to go, e.g. \"go to the black chair\", and the robot"
-    echo "walks there using Gemini Robotics-ER and the RealSense camera. Type the next target"
+    echo "walks there using GPT-6.2 Astra and the RealSense camera. Type the next target"
     echo "whenever you like; a command typed while walking replaces the current target."
     echo "\"stop\" halts the robot, \"quit\" or Ctrl+D exits, Ctrl+C stops the robot and exits."
     echo
-    echo "Run tools/start_robot.sh (default policy) first; after this script starts,"
+    echo "Run tools/start_robot.sh (RPO BeyondMimic) first; after this script starts,"
     echo "press Y on the gamepad to hand control to /cmd_vel."
     echo
     echo "  --voice           listen and speak using the reSpeaker"
     echo "  --dry-run         publish to /cmd_vel_test instead of /cmd_vel (robot not needed)"
-    echo "  --debug-images    save each LOOK frame with the Gemini point to ~/er_goto_debug"
+    echo "  --debug-images    save each LOOK frame with the Astra point to ~/er_goto_debug"
     echo "  --restart-camera  restart the er_camera_session camera before running"
     echo
     echo "Example: $0"
@@ -163,24 +163,20 @@ if [ ! -f "$FASTRTPS_DEFAULT_PROFILES_FILE" ]; then
     exit 1
 fi
 
-# GEMINI_API_KEY from .env (see .env.example)
+# OPENAI_API_KEY from .env (see .env.example)
 if [ -f .env ]; then
     set -a
     source .env
     set +a
 fi
-if [ -z "${GEMINI_API_KEY:-}" ]; then
-    print_error "GEMINI_API_KEY is not set. Copy .env.example to .env and fill it in."
+if [ -z "${OPENAI_API_KEY:-}" ]; then
+    print_error "OPENAI_API_KEY is not set. Copy .env.example to .env and fill it in."
     exit 1
 fi
 
 if [ "$VOICE" = true ]; then
     if [ "${#TARGET_WORDS[@]}" -gt 0 ]; then
         print_error "Start voice mode without a first target, then speak your command."
-        exit 1
-    fi
-    if [ -z "${OPENAI_API_KEY:-}" ]; then
-        print_error "Set OPENAI_API_KEY in .env for voice mode."
         exit 1
     fi
     if ! python3 -c "import sounddevice; from websockets.asyncio.client import connect"; then
@@ -198,8 +194,8 @@ for cmd in colcon ros2 screen; do
         exit 1
     fi
 done
-if ! python3 -c "import google.genai" &>/dev/null; then
-    print_error "google-genai is not installed: pip3 install google-genai"
+if ! python3 -c "from openai import OpenAI" &>/dev/null; then
+    print_error "Install the OpenAI SDK: python3 -m pip install --user 'openai>=2'"
     exit 1
 fi
 

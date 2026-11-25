@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Decision logic of the look-while-walking loop, kept free of ROS for unit tests.
 
-A Gemini answer takes seconds, so the robot keeps walking on the newest one.
+An Astra answer takes seconds, so the robot keeps walking on the newest one.
 Each answer is tied to the dead-reckoned pose at the moment its photo was taken,
 which turns "the chair was 20 deg left of where I stood then" into a bearing and
 distance from where the robot is now.
@@ -160,10 +160,10 @@ class _Fix:
 
 
 class Navigator:
-    """Walks toward the newest Gemini fix and decides when to stop and look.
+    """Walks toward the newest Astra fix and decides when to stop and look.
 
     The node calls tick() at its publish rate and publishes the returned command.
-    When the command carries a Look, the node photographs, asks Gemini and
+    When the command carries a Look, the node photographs, asks Astra and
     reports back with seen(), missed() or failed(). At most one LOOK is in flight.
 
     STAND   zero; after settle_time, a standing LOOK, whose answer decides:
@@ -371,7 +371,7 @@ class Navigator:
         self._log(f'SEARCH: target not in view ({self._misses}/{self.t.max_search})')
 
     def failed(self, look):
-        """A LOOK got no answer (Gemini error); the next tick asks again."""
+        """A LOOK got no answer (Astra error); the next tick asks again."""
         self._looking = False
 
 

@@ -25,7 +25,7 @@ def generate_launch_description():
             description='Publish to /cmd_vel_test instead of /cmd_vel'),
         DeclareLaunchArgument(
             'save_debug_images', default_value='false',
-            description='Save each LOOK frame with the Gemini point drawn on it'),
+            description='Save each LOOK frame with the Astra point drawn on it'),
         DeclareLaunchArgument(
             'params_file', default_value=default_params,
             description='Parameter file'),

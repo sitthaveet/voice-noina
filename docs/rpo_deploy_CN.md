@@ -273,7 +273,7 @@ motor_zero_offset:
 ./tools/start_robot.sh
 ```
 
-默认启动配置为 `rpo` 机器人和 `default` 策略。显式指定机器人与策略的命令如下：
+默认启动配置为 `rpo` 机器人和 `beyondmimic` 策略。显式指定机器人与策略的命令如下：
 
 ```bash
 ./tools/start_robot.sh --robot rpo --policy amp

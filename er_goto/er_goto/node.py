@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
-"""ROS 2 node: walk the robot to an object that Gemini Robotics-ER points at.
+"""ROS 2 node: walk the robot to an object that GPT-6.2 Astra points at.
 
-Look while walking: Gemini answers "where is the target in this image" on a
+Look while walking: Astra answers "where is the target in this image" on a
 background thread while the control loop keeps publishing at publish_rate,
 steering toward the newest answer by dead reckoning (control.Navigator). The
 robot stops only to confirm arrival, when the newest answer is too old, when the
@@ -32,12 +32,14 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
 from rclpy.utilities import remove_ros_args
 from sensor_msgs.msg import CameraInfo, Image
+from std_srvs.srv import SetBool
 
 from er_goto import control, geometry
 from er_goto.commands import Command, EXIT_FAILED, EXIT_OK, NewCommand, command_loop
-from er_goto.gemini_client import GeminiError, GeminiPointer, ResponseParseError, point_to_pixel
+from er_goto.vision_client import (DEFAULT_MODEL, DEFAULT_REASONING_EFFORT, DEFAULT_SERVICE_TIER,
+                                   ResponseParseError, VisionError, VisionPointer, point_to_pixel)
 
-# clip_cmd of the rpo default policy (src/inference/robots/rpo/configs/default.yaml).
+# clip_cmd in src/inference/robots/rpo/configs/beyondmimic.yaml.
 POLICY_MAX_LINEAR_X = 0.6
 POLICY_MAX_ANGULAR_Z = 0.8
 
@@ -57,11 +59,12 @@ PARAMETERS = {
     'camera_info_topic': '/camera/camera/color/camera_info',
     'cmd_vel_topic': '/cmd_vel',
     'dry_run_topic': '/cmd_vel_test',
-    # Gemini
-    'model': 'gemini-robotics-er-2-preview',
-    'thinking_level': 'low',
-    'gemini_timeout': 15.0,
-    'gemini_retries': 1,
+    # Astra
+    'model': DEFAULT_MODEL,
+    'reasoning_effort': DEFAULT_REASONING_EFFORT,
+    'service_tier': DEFAULT_SERVICE_TIER,
+    'vision_timeout': 15.0,
+    'vision_retries': 1,
     'max_api_errors': 3,
     'jpeg_quality': 90,
     # Control
@@ -118,7 +121,7 @@ class LookResult:
 
 
 class Background:
-    """fn(*args) on a daemon thread, so that exiting never waits for a Gemini call."""
+    """fn(*args) on a daemon thread, so that exiting never waits for an Astra call."""
 
     def __init__(self, fn, *args):
         self._done = threading.Event()
@@ -153,6 +156,9 @@ class ErGotoNode(Node):
         self._validate_parameters()
 
         p = self.p
+        self._wave_client = (self.create_client(SetBool, '/inference_node/wave')
+                             if p['voice'] and not p['dry_run'] else None)
+        self._wave_requested = False
         self.commands = queue.Queue()  # prompt lines, interactive mode
         self._told_operator = False
         self.tuning = control.Tuning(
@@ -185,9 +191,9 @@ class ErGotoNode(Node):
         self.create_subscription(CameraInfo, p['camera_info_topic'],
                                  lambda m: self._store('info', m), qos_profile_sensor_data)
 
-        self.gemini = GeminiPointer(
-            model=p['model'], thinking_level=p['thinking_level'],
-            timeout=p['gemini_timeout'], retries=p['gemini_retries'])
+        self.pointer = VisionPointer(
+            model=p['model'], reasoning_effort=p['reasoning_effort'], service_tier=p['service_tier'],
+            timeout=p['vision_timeout'], retries=p['vision_retries'])
 
         self._watchdog_stop = threading.Event()
         self._watchdog = threading.Thread(target=self._watchdog_loop, daemon=True)
@@ -212,7 +218,7 @@ class ErGotoNode(Node):
             errors.append('turn_speed must be in (0, max_angular_z]')
         for name in ('stop_dist', 'align_tol', 'k_turn', 'slow_dist', 'search_turn_time',
                      'max_blind_time', 'max_blind_dist', 'max_run_time', 'max_frame_age',
-                     'watchdog_timeout', 'gemini_timeout', 'publish_rate', 'startup_timeout',
+                     'watchdog_timeout', 'vision_timeout', 'publish_rate', 'startup_timeout',
                      'depth_scale'):
             if not p[name] > 0.0:
                 errors.append(f'{name} must be > 0')
@@ -221,8 +227,9 @@ class ErGotoNode(Node):
                 errors.append(f'{name} must be >= 0')
         if not 0.0 <= p['min_progress'] <= 1.0:
             errors.append('min_progress must be in [0, 1]')
-        if p['max_stalls'] < 0:
-            errors.append('max_stalls must be >= 0')
+        for name in ('vision_retries', 'max_stalls'):
+            if p[name] < 0:
+                errors.append(f'{name} must be >= 0')
         if p['turn_in_place_angle'] < p['align_tol']:
             errors.append('turn_in_place_angle must be >= align_tol')
         if p['publish_rate'] > 0.0 and 2.0 / p['publish_rate'] >= p['watchdog_timeout']:
@@ -268,6 +275,42 @@ class ErGotoNode(Node):
                 return
             if i + 1 < count:
                 time.sleep(interval)
+
+    def _set_wave(self, enabled):
+        client = self._wave_client
+        if client is None or not client.service_is_ready():
+            raise RuntimeError('Wave service unavailable. Start the RPO with BeyondMimic.')
+        # The executor runs on a separate thread. Bound the wait on a lost server.
+        done = threading.Event()
+        future = client.call_async(SetBool.Request(data=enabled))
+        if enabled:
+            self._wave_requested = True  # a lost acknowledgement still needs cancellation
+        future.add_done_callback(lambda _: done.set())
+        if not done.wait(1.0):
+            client.remove_pending_request(future)
+            raise RuntimeError('Timed out waiting for the wave service')
+        result = future.result()
+        if not result.success:
+            if enabled:
+                self._wave_requested = False
+            raise RuntimeError(result.message)
+
+    def start_wave(self):
+        if self.p['dry_run']:
+            self.get_logger().info('Dry run: would play policy_wave.onnx')
+            return 'wave simulated'
+        try:
+            self._set_wave(True)
+        except Exception:
+            self.cancel_wave()
+            raise
+        self.get_logger().info('Started policy_wave.onnx')
+        return 'wave started'
+
+    def cancel_wave(self):
+        if self._wave_requested:
+            self._set_wave(False)
+            self._wave_requested = False
 
     def _send(self, linear_x, angular_z):
         """Publish one control-loop command and feed the watchdog."""
@@ -382,10 +425,10 @@ class ErGotoNode(Node):
         return rgb.msg, depth.msg, info.msg
 
     def _look(self, target, debug_dir, iteration, standing, rgb_msg, depth_msg, info):
-        """Ask Gemini where target is in these frames; runs on a Background thread.
+        """Ask Astra where target is in these frames; runs on a Background thread.
 
         Returns a LookResult, or None if the target is not visible or the answer
-        could not be parsed. Raises GeminiError (transient) or GeminiFatalError.
+        could not be parsed. Raises VisionError (transient) or VisionFatalError.
         """
         name = f'LOOK {iteration} ({"standing" if standing else "moving"})'
         rgb = geometry.image_to_array(rgb_msg.encoding, rgb_msg.height, rgb_msg.width,
@@ -397,14 +440,14 @@ class ErGotoNode(Node):
 
         started = time.monotonic()
         try:
-            points, text = self.gemini.point(jpeg.tobytes(), target)
+            points, text = self.pointer.point(jpeg.tobytes(), target)
         except ResponseParseError as exc:
             latency = time.monotonic() - started
             self.get_logger().warning(f'{name}: unusable answer ({exc}), latency {latency:.1f} s')
             self._save_debug(debug_dir, target, iteration, bgr, None, f'unparseable: {exc}')
             return None
         latency = time.monotonic() - started
-        self.get_logger().debug(f'Gemini answer: {text}')
+        self.get_logger().debug(f'Astra answer: {text}')
 
         if not points:
             self.get_logger().info(f'{name}: "{target}" not visible, '
@@ -487,7 +530,7 @@ class ErGotoNode(Node):
         frame_timeout = max(2.0, 4 * p['max_frame_age'])
         nav = control.Navigator(self.tuning, time.monotonic(), log=log.info)
         wanted = None   # (Look, requested at) waiting for suitable frames
-        running = None  # (Look, iteration, Background) waiting for Gemini
+        running = None  # (Look, iteration, Background) waiting for Astra
         looks = 0
         api_errors = 0
         with self._state_lock:
@@ -507,12 +550,12 @@ class ErGotoNode(Node):
                     running = None
                     try:
                         found = task.result()
-                    except GeminiError as exc:
+                    except VisionError as exc:
                         api_errors += 1
                         log.error(f'LOOK {iteration}: {exc} '
                                   f'({api_errors}/{p["max_api_errors"]})')
                         if api_errors >= p['max_api_errors']:
-                            raise control.GaveUp('too many consecutive Gemini errors') from exc
+                            raise control.GaveUp('too many consecutive Astra errors') from exc
                         nav.failed(look)
                     else:
                         api_errors = 0
@@ -629,13 +672,17 @@ def main(args=None):
     except StopRequested as exc:
         exit_code = EXIT_STOPPED
         _report(node, f'{exc} received, stopping', warning=True)
-    except Exception as exc:  # GeminiFatalError, invalid parameters, camera loss, ...
+    except Exception as exc:  # VisionFatalError, invalid parameters, camera loss, ...
         _report(node, f'{type(exc).__name__}: {exc}')
     finally:
         stopping.set()  # a signal from here on must not interrupt the zero publish
         if node is not None:
             node.stop_watchdog()
             node.publish_zero(count=10)
+            try:
+                node.cancel_wave()
+            except Exception as exc:
+                node.get_logger().error(f'Wave cancellation failed: {exc}')
             node.get_logger().info(f'Published zero; exiting with code {exit_code}')
         if voice is not None:
             voice.close()

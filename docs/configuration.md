@@ -14,7 +14,7 @@ This reference explains deployment parameters, units, array ordering, and relate
 | [realsense_d435i.yaml](../src/camera/configs/realsense_d435i.yaml) | RealSense `rs_launch.py` | Camera launch settings at the top level |
 | [set_zero_rpo.yaml](../scripts/config/set_zero_rpo.yaml), [set_zero_rp1.yaml](../scripts/config/set_zero_rp1.yaml) | `scripts/set_zero.py` | Motor creation for zeroing, with parameters at the top level |
 
-Robot startup selects a robot directory with `--robot` and a policy in that directory with `--policy`. Defaults are `rpo` / `default`. Camera startup's `--policy` selects a file in `src/camera/configs/`; it is a separate file from the robot policy configuration.
+Robot startup selects a robot directory with `--robot` and a policy in that directory with `--policy`. Defaults are `rpo` / `beyondmimic`. Camera startup's `--policy` selects a file in `src/camera/configs/`; it is a separate file from the robot policy configuration.
 
 | Robot directory | Motor count | Default hardware | Current policy configurations |
 | --- | --- | --- | --- |

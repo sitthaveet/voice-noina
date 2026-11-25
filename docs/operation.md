@@ -4,7 +4,7 @@
 
 These operations apply to RPO and RP1. Refer to [RPO Deployment](rpo_deploy.md) for wiring, calibration references, and policy selection. Run all commands from the repository root.
 
-Follow the corresponding robot guide for environment setup, wiring, zeroing, and startup. See [RPO Environment Setup](rpo_deploy.md#environment-setup) for dependency installation and real-time configuration. Startup defaults to `rpo` / `default`; select RP1 explicitly when using the available files. Parameter definitions and file formats are in the [YAML Configuration Reference](configuration.md).
+Follow the corresponding robot guide for environment setup, wiring, zeroing, and startup. See [RPO Environment Setup](rpo_deploy.md#environment-setup) for dependency installation and real-time configuration. Startup defaults to `rpo` / `beyondmimic`; select RP1 explicitly when using the available files. Parameter definitions and file formats are in the [YAML Configuration Reference](configuration.md).
 
 ## ROS Environment and Build
 
@@ -45,7 +45,7 @@ Use a single ROS distribution per terminal and workspace. When changing distribu
 
 ## Startup and Logs
 
-The startup command is `bash tools/start_robot.sh --robot ROBOT --policy POLICY`. Defaults are `rpo` / `default`; see the robot guides for specific commands.
+The startup command is `bash tools/start_robot.sh --robot ROBOT --policy POLICY`. Defaults are `rpo` / `beyondmimic`; see the robot guides for specific commands.
 
 RP1 `default` uses the trained Flat policy (3 history frames, 50 Hz). `beyondmimic` starts with the same Flat policy; press LB to switch between walking and waving. The waving policy uses one frame and holds the final reference pose:
 
