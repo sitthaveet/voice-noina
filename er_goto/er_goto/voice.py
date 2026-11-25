@@ -105,7 +105,7 @@ class VoiceCommands:
 
     def disconnect(self, reason):
         with self.condition:
-            self.error = reason
+            self.error = self.error or reason  # the first reason is the cause
             self.pending = None
             self.condition.notify_all()
 
@@ -220,10 +220,15 @@ async def _session(commands, log):
         async with connect('wss://api.openai.com/v1/live/sessions',
                            additional_headers={'Authorization': 'Bearer ' + os.environ['OPENAI_API_KEY']},
                            open_timeout=10, close_timeout=1, ping_interval=2, ping_timeout=2) as socket:
+            reason = 'Voice session ended'
             try:
                 await _conversation(socket, audio, commands, log)
+            except Exception as exc:
+                reason = f'Voice session ended: {type(exc).__name__}: {exc}'
+                raise
             finally:
-                commands.disconnect('Voice session ended')
+                # Report the cause before the teardown below, which can take over a second.
+                commands.disconnect(reason)
                 with suppress(Exception):
                     await asyncio.wait_for(socket.send('{"type":"session.close"}'), 0.5)
 
@@ -242,7 +247,7 @@ class VoiceSession:
         except asyncio.CancelledError:
             pass
         except Exception as exc:
-            self.log.error(f'Voice session failed: {exc}')
+            self.log.error(f'Voice session failed: {type(exc).__name__}: {exc}')
         finally:
             self.commands.disconnect('Voice session ended')
             self.loop.close()
@@ -251,8 +256,12 @@ class VoiceSession:
         self.thread.start()
 
     def close(self):
+        # A session that ended by itself is already closing its socket. Cancelling it there
+        # would abandon the connection and leave tasks behind on a closed loop.
+        ended = self.commands.error is not None
         self.commands.disconnect('Voice mode closed')
         if self.thread.is_alive():
-            with suppress(RuntimeError):
-                self.loop.call_soon_threadsafe(lambda: self.task.cancel())
+            if not ended:
+                with suppress(RuntimeError):
+                    self.loop.call_soon_threadsafe(lambda: self.task.cancel())
             self.thread.join(timeout=2)

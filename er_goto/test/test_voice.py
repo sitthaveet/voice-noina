@@ -12,6 +12,7 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 
+from er_goto import voice
 from er_goto.commands import Command, NewCommand, command_loop
 from er_goto.voice import LiveEvents, VoiceCommands, _conversation
 from er_goto.voice_audio import RobotAudio
@@ -196,6 +197,59 @@ def test_missing_microphone_frames_end_session():
             await asyncio.wait_for(_conversation(OpenSocket(), audio, VoiceCommands(),
                                                  logging.getLogger()), 1)
     asyncio.run(exercise())
+
+
+def test_failed_session_names_its_cause_and_finishes_closing(monkeypatch):
+    closed = threading.Event()
+
+    class Socket:
+        async def send(self, raw):
+            pass
+
+        async def recv(self):
+            return '{"type":"session.started"}'
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            await asyncio.Event().wait()
+
+    class Connect:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return Socket()
+
+        async def __aexit__(self, *exc):
+            await asyncio.sleep(0.2)  # the close handshake outlasts the main thread's cleanup
+            closed.set()
+
+    class Audio:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            pass
+
+        def start(self):
+            pass
+
+        def read(self):
+            raise RuntimeError('microphone stream fell behind')
+
+    monkeypatch.setattr('websockets.asyncio.client.connect', Connect)
+    monkeypatch.setattr(voice, 'RobotAudio', Audio)
+    monkeypatch.setenv('OPENAI_API_KEY', 'test')
+    log = Mock()
+    session = voice.VoiceSession(log)
+    session.start()
+    with pytest.raises(ConnectionError, match='microphone stream fell behind'):
+        session.commands.get(2)
+    session.close()
+    assert closed.is_set() and not session.thread.is_alive()
+    assert 'microphone stream fell behind' in log.error.call_args.args[0]
 
 
 def test_wave_accepts_only_empty_arguments_and_preserves_pending_destination():
