@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Full-duplex USB audio through the XVF3800 (16 kHz USB firmware)."""
 
+from contextlib import suppress
 import os
 import queue
 import threading
@@ -56,9 +57,14 @@ class RobotAudio:
         if self.error or not self.stream.active:
             raise RuntimeError(self.error or 'reSpeaker stream stopped')
         try:
-            return self.input.get(timeout=0.5)
+            chunks = [self.input.get(timeout=0.5)]
         except queue.Empty as exc:
             raise RuntimeError('reSpeaker microphone stopped delivering audio') from exc
+        # Take the whole backlog: one block per call cannot catch up once the CPU is busy.
+        with suppress(queue.Empty):
+            while True:
+                chunks.append(self.input.get_nowait())
+        return b''.join(chunks)
 
     def play(self, pcm):
         with self.lock:

@@ -112,6 +112,17 @@ def test_duplex_callback_selects_processed_mic_and_plays_on_both_channels():
     assert outgoing.tolist() == [[100, 100], [-200, -200], [0, 0], [0, 0]]
 
 
+def test_read_takes_the_whole_microphone_backlog():
+    audio = RobotAudio()
+    audio.error = None
+    audio.stream = Mock(active=True)
+    audio.input = queue.Queue()
+    for block in (b'\x01\x00', b'\x02\x00', b'\x03\x00'):
+        audio.input.put(block)
+    assert audio.read() == b'\x01\x00\x02\x00\x03\x00'
+    assert audio.input.empty()
+
+
 def test_live_session_streams_audio_and_delivers_actual_navigation_outcome():
     async def exercise():
         sent = []
